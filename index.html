@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Я тебя люблю ❤️</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: radial-gradient(circle at 50% 45%, #2a0a20 0%, #12040f 65%, #000 100%);
+    font-family: 'Segoe UI', sans-serif;
+  }
+
+  canvas { display: block; width: 100vw; height: 100vh; cursor: pointer; }
+
+  .hint {
+    position: fixed;
+    bottom: 22px;
+    left: 0; right: 0;
+    text-align: center;
+    color: rgba(255, 190, 220, 0.75);
+    font-size: 15px;
+    letter-spacing: 1.5px;
+    pointer-events: none;
+    transition: opacity 0.6s ease;
+    text-shadow: 0 0 12px rgba(255, 100, 160, 0.6);
+  }
+  .hint.hidden { opacity: 0; }
+  .hint::after {
+    content: '';
+    display: block;
+    margin: 10px auto 0;
+    width: 0; height: 0;
+    border-left: 7px solid transparent;
+    border-right: 7px solid transparent;
+    border-top: 10px solid rgba(255, 150, 190, 0.8);
+    animation: bounce 1.4s ease-in-out infinite;
+  }
+  @keyframes bounce {
+    0%,100% { transform: translateY(0); opacity: 0.9; }
+    50% { transform: translateY(6px); opacity: 1; }
+  }
+</style>
+</head>
+<body>
+
+<canvas id="scene"></canvas>
+<div class="hint" id="hint">нажми на сердце</div>
+
+<script>
+const canvas = document.getElementById('scene');
+const ctx = canvas.getContext('2d');
+const hintEl = document.getElementById('hint');
+
+let W, H, DPR;
+let state = 'idle';          // 'idle' → ждём клика | 'assembling' | 'done'
+let bigHeartScale = 1;
+let bigHeartPulse = 0;
+let canBurst = false;         // можно ли разлетаться по клику
+
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth;
+  H = window.innerHeight;
+  canvas.width = W * DPR;
+  canvas.height = H * DPR;
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  if (state !== 'idle') {
+    buildTargets();
+    remapHearts();
+  }
+}
+window.addEventListener('resize', resize);
+
+/* ================= РИСОВАНИЕ СЕРДЦА ================= */
+function heartPath(size) {
+  const k = size / 16;
+  ctx.beginPath();
+  ctx.moveTo(0, 4 * k);
+  ctx.bezierCurveTo(0, 1 * k, -6 * k, -4 * k, -10 * k, 0);
+  ctx.bezierCurveTo(-14 * k, 4 * k, -8 * k, 11 * k, 0, 16 * k);
+  ctx.bezierCurveTo(8 * k, 11 * k, 14 * k, 4 * k, 10 * k, 0);
+  ctx.bezierCurveTo(6 * k, -4 * k, 0, 1 * k, 0, 4 * k);
+  ctx.closePath();
+}
+
+/* ================= ЦЕЛЕВЫЕ ТОЧКИ ================= */
+let targets = [];
+let fontSize = 100;
+
+function buildTargets() {
+  // 🔠 УВЕЛИЧЕННЫЙ размер шрифта — надпись крупная и читаемая
+  fontSize = Math.min(W / 6.2, H / 3.1);
+  fontSize = Math.max(fontSize, 52);
+
+  const off = document.createElement('canvas');
+  const octx = off.getContext('2d');
+  off.width = W; off.height = H;
+
+  octx.fillStyle = '#fff';
+  octx.textAlign = 'center';
+  octx.textBaseline = 'middle';
+  octx.font = `900 ${fontSize}px 'Segoe UI', Arial, sans-serif`;
+
+  const lineGap = fontSize * 1.05;
+  octx.fillText('Я ТЕБЯ', W / 2, H / 2 - lineGap / 2);
+  octx.fillText('ЛЮБЛЮ', W / 2, H / 2 + lineGap / 2);
+
+  const data = octx.getImageData(0, 0, W, H).data;
+  // шаг пропорционален шрифту — при крупном шрифте сердечки крупнее и реже
+  const step = Math.max(7, Math.round(fontSize / 11));
+  targets = [];
+
+  for (let y = 0; y < H; y += step) {
+    for (let x = 0; x < W; x += step) {
+      if (data[(y * W + x) * 4 + 3] > 128) {
+        targets.push({
+          x: x + (Math.random() - 0.5) * step * 0.6,
+          y: y + (Math.random() - 0.5) * step * 0.6
+        });
+      }
+    }
+  }
+}
+
+/* ================= СЕРДЕЧКИ ================= */
+const COLORS = ['#ff3d7f', '#ff5c9d', '#ff7ab3', '#ff9fc7', '#ff2e6a', '#ffb3d1'];
+let hearts = [];
+
+// Создание сердечек из взрыва большого сердца
+function createHeartsFromExplosion() {
+  hearts = [];
+  const cx = W / 2, cy = H / 2;
+
+  for (let i = 0; i < targets.length; i++) {
+    const target = targets[i];
+    const angle = Math.random() * Math.PI * 2;
+    const dist = Math.random() * Math.min(W, H) * 0.15;
+    const power = Math.random() * 10 + 6;
+
+    hearts.push({
+      x: cx + Math.cos(angle) * dist,
+      y: cy + Math.sin(angle) * dist,
+      vx: Math.cos(angle) * power,
+      vy: Math.sin(angle) * power - 2,
+      tx: target.x,
+      ty: target.y,
+      size: fontSize * (0.15 + Math.random() * 0.05),
+      color: COLORS[Math.floor(Math.random() * COLORS.length)],
+      rot: Math.random() * Math.PI * 2,
+      vr: (Math.random() - 0.5) * 0.25,
+      phase: Math.random() * Math.PI * 2,
+      delay: performance.now() + 550 + Math.random() * 900,
+      arrived: false
+    });
+  }
+}
+
+// Пересчёт целей при ресайзе
+function remapHearts() {
+  for (let i = 0; i < hearts.length; i++) {
+    const t = targets[i % targets.length];
+    if (t) { hearts[i].tx = t.x; hearts[i].ty = t.y; }
+  }
+}
+
+// 💥 Разлёт по клику после сборки — как в прошлой версии
+function burstFromPhrase() {
+  if (!canBurst) return;
+  canBurst = false;
+
+  for (const h of hearts) {
+    h.x = h.tx;
+    h.y = h.ty;
+    const angle = Math.random() * Math.PI * 2;
+    const power = Math.random() * 9 + 4;
+    h.vx = Math.cos(angle) * power;
+    h.vy = Math.sin(angle) * power;
+    h.vr = (Math.random() - 0.5) * 0.3;
+    h.arrived = false;
+    h.delay = performance.now() + 700 + Math.random() * 700;
+  }
+  state = 'assembling';
+}
+
+/* ================= РИСОВАНИЕ МАЛЕНЬКОГО СЕРДЦА ================= */
+function drawHeart(h) {
+  const s = h.size;
+  ctx.save();
+  ctx.translate(h.x, h.y);
+  ctx.rotate(h.rot);
+
+  const beat = h.arrived ? 1 + Math.sin(h.phase) * 0.08 : 1;
+  ctx.scale(beat, beat);
+
+  ctx.shadowColor = h.color;
+  ctx.shadowBlur = s * 0.9;
+  ctx.fillStyle = h.color;
+
+  heartPath(s);
+  ctx.fill();
+  ctx.restore();
+}
+
+/* ================= БОЛЬШОЕ СЕРДЦЕ ================= */
+function drawBigHeart() {
+  const baseSize = Math.min(W, H) * 0.22;
+  const pulse = 1 + Math.sin(bigHeartPulse) * 0.06;
+  const s = baseSize * bigHeartScale * pulse;
+
+  ctx.save();
+  ctx.translate(W / 2, H / 2);
+
+  const grad = ctx.createRadialGradient(0, 0, 0, 0, 0, s * 1.8);
+  grad.addColorStop(0, 'rgba(255, 70, 130, 0.35)');
+  grad.addColorStop(1, 'rgba(255, 70, 130, 0)');
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(0, 0, s * 1.8, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.shadowColor = '#ff3d7f';
+  ctx.shadowBlur = 60;
+  ctx.fillStyle = '#ff3d7f';
+  heartPath(s);
+  ctx.fill();
+
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = 'rgba(255, 200, 225, 0.45)';
+  ctx.beginPath();
+  ctx.ellipse(-s * 0.22, -s * 0.18, s * 0.14, s * 0.09, -0.5, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
+}
+
+/* ================= АНИМАЦИЯ ================= */
+let lastT = performance.now();
+
+function animate(now) {
+  const dt = Math.min((now - lastT) / 16.67, 3);
+  lastT = now;
+
+  // фон с лёгким шлейфом
+  ctx.fillStyle = 'rgba(8, 2, 8, 0.32)';
+  ctx.fillRect(0, 0, W, H);
+
+  bigHeartPulse += 0.05 * dt;
+
+  if (state === 'idle') {
+    drawBigHeart();
+  } else {
+    let allArrived = true;
+
+    for (const h of hearts) {
+      if (now < h.delay) {
+        // свободный полёт после взрыва
+        h.vy += 0.15 * dt;
+        h.vx *= 0.985;
+        h.vy *= 0.985;
+        h.x += h.vx * dt;
+        h.y += h.vy * dt;
+        h.rot += h.vr * dt;
+        allArrived = false;
+      } else {
+        // летим к цели
+        const dx = h.tx - h.x;
+        const dy = h.ty - h.y;
+        h.vx = (h.vx + dx * 0.014 * dt) * 0.9;
+        h.vy = (h.vy + dy * 0.014 * dt) * 0.9;
+        h.x += h.vx * dt;
+        h.y += h.vy * dt;
+
+        h.rot += h.vr * dt;
+        h.vr *= 0.96;
+        h.rot += (0 - h.rot) * 0.04 * dt;
+
+        if (Math.abs(dx) + Math.abs(dy) > 3) allArrived = false;
+        else h.arrived = true;
+
+        h.phase += 0.07 * dt;
+      }
+
+      drawHeart(h);
+    }
+
+    if (allArrived && state !== 'done') {
+      state = 'done';
+      canBurst = true;   // теперь можно снова разлететься кликом
+    }
+  }
+
+  requestAnimationFrame(animate);
+}
+
+/* ================= КЛИК ================= */
+function handleClick() {
+  if (state === 'idle') {
+    // старт: большое сердце взрывается
+    hintEl.classList.add('hidden');
+    bigHeartScale = 0.6;
+    buildTargets();
+    createHeartsFromExplosion();
+    state = 'assembling';
+  } else if (state === 'done') {
+    // после сборки — снова разлёт
+    burstFromPhrase();
+  }
+}
+
+canvas.addEventListener('click', handleClick);
+canvas.addEventListener('touchstart', (e) => { e.preventDefault(); handleClick(); }, { passive: false });
+
+/* ================= СТАРТ ================= */
+resize();
+requestAnimationFrame(animate);
+</script>
+
+</body>
+</html>
